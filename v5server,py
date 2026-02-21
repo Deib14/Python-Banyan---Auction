@@ -1,0 +1,141 @@
+import socket
+import threading
+import tkinter as tk
+from tkinter import ttk
+
+HOST = "0.0.0.0"
+PORT = 5000
+
+class AuctionServer:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Auction Server")
+        self.root.geometry("900x600")
+        self.root.configure(bg="#1e1e1e")
+
+        self.clients = []
+        self.current_item = ""
+        self.current_bid = 0
+        self.highest_bidder = ""
+        self.time_left = 0
+        self.running = False
+
+        self.build_ui()
+        threading.Thread(target=self.start_server, daemon=True).start()
+
+    # ---------------- UI ----------------
+    def build_ui(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TLabel", background="#1e1e1e", foreground="white", font=("Segoe UI", 12))
+        style.configure("TButton", font=("Segoe UI", 11))
+
+        ttk.Label(self.root, text="AUCTIONEER PANEL",
+                  font=("Segoe UI", 18, "bold"),
+                  background="#1e1e1e",
+                  foreground="white").pack(pady=10)
+
+        self.item_label = ttk.Label(self.root, text="Current Item: None")
+        self.item_label.pack()
+
+        self.timer_label = ttk.Label(self.root, text="Time Remaining: 0")
+        self.timer_label.pack()
+
+        self.bid_label = ttk.Label(self.root, text="Highest Bid: 0")
+        self.bid_label.pack(pady=10)
+
+        self.history = tk.Text(self.root, height=15, width=80,
+                               bg="#ffffff", fg="black", state="disabled")
+        self.history.pack(pady=10)
+
+        self.item_entry = ttk.Entry(self.root, width=30)
+        self.item_entry.pack(pady=5)
+        self.item_entry.insert(0, "Enter item name")
+
+        ttk.Button(self.root, text="Start Auction",
+                   command=self.start_auction).pack(pady=5)
+        
+    # ---------------- SERVER SOCKET ----------------
+    def start_server(self):
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.bind((HOST, PORT))
+        self.server.listen()
+        self.history.insert(tk.END, "Server started...\n")
+
+        while True:
+            client, addr = self.server.accept()
+            self.clients.append(client)
+            self.history.insert(tk.END, f"Connected: {addr}\n")
+            threading.Thread(target=self.handle_client,
+                             args=(client,), daemon=True).start()
+
+    def handle_client(self, client):
+        while True:
+            try:
+                msg = client.recv(1024).decode()
+                if msg.startswith("BID"):
+                    _, name, amount = msg.split("|")
+                    amount = int(amount)
+                    self.process_bid(name, amount)
+            except:
+                break
+
+    def broadcast(self, message):
+        for client in self.clients:
+            try:
+                client.send(message.encode())
+            except:
+                pass
+
+    # ---------------- AUCTION LOGIC ----------------
+    def start_auction(self):
+        self.current_item = self.item_entry.get()
+        self.current_bid = 0
+        self.highest_bidder = ""
+        self.time_left = 30
+        self.running = True
+
+        self.update_ui()
+        self.broadcast(f"ITEM|{self.current_item}")
+        threading.Thread(target=self.countdown, daemon=True).start()
+
+    def countdown(self):
+        while self.time_left > 0 and self.running:
+            self.timer_label.config(text=f"Time Remaining: {self.time_left}")
+            self.broadcast(f"TIME|{self.time_left}")
+            self.time_left -= 1
+            self.root.after(1000)
+            import time
+            time.sleep(1)
+
+        if self.running:
+            self.history.insert(tk.END,
+                                f"\nAuction ended for {self.current_item}\n")
+            self.broadcast("END")
+
+    def process_bid(self, name, amount):
+        if amount >= self.current_bid + 100:
+            self.current_bid = amount
+            self.highest_bidder = name
+
+            self.bid_label.config(
+                text=f"Highest Bid: {amount} ({name})")
+
+            self.history.insert(tk.END,
+                                f"{name} bid {amount}\n")
+
+            self.broadcast(f"BIDUPDATE|{name}|{amount}")
+
+            # Auto extend
+            if self.time_left <= 5:
+                self.time_left += 5
+
+    def update_ui(self):
+        self.item_label.config(
+            text=f"Current Item: {self.current_item}")
+        self.bid_label.config(text="Highest Bid: 0")
+
+
+root = tk.Tk()
+app = AuctionServer(root)
+root.mainloop()
